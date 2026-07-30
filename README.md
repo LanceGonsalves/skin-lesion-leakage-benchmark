@@ -260,6 +260,16 @@ python -m src.data.audit --embeddings          # slower, semantic near-duplicate
 # 4. build both splits and measure contamination in each
 python -m src.data.splits
 
+# 5. verify the training pipeline runs (200 images, ~1 min)
+python -m src.models.train --split grouped --smoke-test
+
+# 6. the experiment: same model, both splits
+python -m src.models.train --split grouped
+python -m src.models.train --split naive
+python -m src.evaluate --split grouped
+python -m src.evaluate --split naive
+python -m src.evaluate --compare        # the headline table
+
 # tests — incl. the assertion that no lesion spans two partitions
 python -m pytest -q
 ```
@@ -280,9 +290,13 @@ Step 4 prints the empirical leakage measurement:
 | Duplicate audit — pHash | ✅ 25 pairs, 1 verified undeclared |
 | Duplicate audit — embeddings | ✅ threshold tuned to 0.985 via sweep |
 | Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
-| Model training | 🚧 |
-| Evaluation + bootstrap CIs | 🚧 |
+| Model training | ✅ built, 🚧 runs pending |
+| Evaluation + bootstrap CIs | ✅ built, 🚧 runs pending |
 | Grad-CAM interpretability | 🚧 |
+
+**20 tests pass**, including that balanced accuracy collapses to 1/n for a
+majority-class-only predictor, that the trainer's metric matches scikit-learn exactly, and
+that no lesion spans two partitions of the grouped split.
 
 ## Repo layout
 
