@@ -6,6 +6,11 @@
 </p>
 
 <p align="center">
+  <b>On HAM10000, a standard random train/test split leaves 40.6% of the "held-out"<br>
+  test set showing lesions the model already trained on.</b>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white">
   <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white">
   <img src="https://img.shields.io/badge/Dataset-HAM10000-4C6EF5?style=flat-square">
@@ -59,9 +64,97 @@ The experiment is deliberately simple, because the *split* is the independent va
 
 This project is **not** attempting state-of-the-art. It's attempting an honest number.
 
-## Results
+## Findings so far
 
-> 🚧 *Experiments in progress — this section will carry the headline comparison table.*
+### 1 · A quarter of the dataset is redundant
+
+Running `python -m src.data.profile` on the real HAM10000:
+
+| | |
+|---|---|
+| Images | **10,015** |
+| Unique lesions | **7,470** |
+| Lesions with more than one image | **1,956** |
+| Most images of a single lesion | **6** |
+| **Redundant images** | **2,545 (25.4%)** |
+
+**One in four images is another view of a lesion already in the dataset.** Those images
+are not independent samples, and a split that treats them as if they were is measuring
+the wrong thing.
+
+Analytically, that implies **~40% of a naive random test set** would contain a lesion the
+model already saw during training. (Measured empirically in finding 2.)
+
+### 2 · Class imbalance makes plain accuracy meaningless
+
+| class | count | share |
+|---|---:|---:|
+| `nv` melanocytic nevi | 6,705 | 67.0% |
+| `mel` melanoma | 1,113 | 11.1% |
+| `bkl` benign keratosis | 1,099 | 11.0% |
+| `bcc` basal cell carcinoma | 514 | 5.1% |
+| `akiec` actinic keratoses | 327 | 3.3% |
+| `vasc` vascular lesions | 142 | 1.4% |
+| `df` dermatofibroma | 115 | 1.2% |
+
+A model predicting `nv` for every image scores **67% accuracy** while being clinically
+useless — it would miss every melanoma. This is why the benchmark reports **balanced
+accuracy, macro-F1 and per-class recall** rather than raw accuracy.
+
+<p align="center">
+  <img src="reports/figures/class_distribution.png" width="49%">
+  <img src="reports/figures/images_per_lesion.png" width="49%">
+</p>
+
+### 3 · A naive split contaminates 40.6% of the test set
+
+`python -m src.data.splits` builds both splits and measures contamination directly —
+what share of test images share a lesion with something the model trained on:
+
+| | Split A (naive) | Split B (grouped) |
+|---|---:|---:|
+| Test images | 1,503 | 1,669 |
+| **Test images sharing a lesion with train/val** | **610 (40.6%)** | **0 (0.0%)** |
+
+**Two in five test images in the naive split are not held out at all.** The model has already
+seen that exact lesion, usually photographed seconds apart at a slightly different angle.
+
+The analytic estimate in finding 1 predicted **40.3%**; direct measurement gives **40.6%**.
+Two independent methods agreeing to within 0.3 points is a good sign the effect is real
+rather than an artefact of one particular random seed.
+
+Class stratification held in both splits (every class within ~0.1pp of its population share),
+so the *only* meaningful difference between them is the leakage. That's what makes the
+head-to-head model comparison valid.
+
+### 4 · Perceptual hashing independently rediscovers the lesion groupings
+
+`python -m src.data.audit --phash` found **25 candidate duplicate pairs**:
+
+| | |
+|---|---:|
+| Candidate pairs (Hamming ≤ 12) | 25 |
+| Already declared — same `lesion_id` | 24 |
+| **Undeclared — different `lesion_id`** | **1** |
+
+**24 of 25 pairs were images the metadata already groups under one lesion.** The detector
+didn't know about `lesion_id`; it found those pairs purely from pixels. That independent
+agreement is a strong precision signal.
+
+The one undeclared pair (`ISIC_0025226` ~ `ISIC_0030074`, both `nv`, lesions `HAM_0004919`
+and `HAM_0000140`) sits at Hamming distance 12 — exactly the threshold — so it is a
+**likely false positive** pending manual review of `reports/figures/duplicate_pairs.png`.
+It is merged into the grouped split regardless: 7,470 lesions become 7,469 effective groups.
+Erring toward over-merging is the conservative choice, since a false merge costs a little
+data while a missed duplicate corrupts the benchmark.
+
+> ⚠️ **Caveat:** pHash only catches near-identical pixels. Two photographs of the same
+> lesion from meaningfully different angles will not be caught. The embedding-similarity
+> pass (`--embeddings`) targets exactly that case and is the next audit step.
+
+### 5 · The leakage experiment
+
+> 🚧 *In progress — same model, both splits. The gap is the result.*
 
 | | Split A (naive) | Split B (grouped) | Δ |
 |---|---|---|---|
@@ -127,11 +220,12 @@ Step 4 prints the empirical leakage measurement:
 
 | Stage | Status |
 |---|---|
-| Dataset verification | ✅ |
-| Metadata profiling | ✅ |
-| Duplicate audit (pHash + embeddings) | ✅ |
-| Split construction + leakage tests | ✅ |
-| Model training | 🚧 next |
+| Dataset verification | ✅ run on real data |
+| Metadata profiling | ✅ run on real data |
+| Duplicate audit — pHash | ✅ 25 pairs found |
+| Duplicate audit — embeddings | 🚧 next |
+| Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
+| Model training | 🚧 |
 | Evaluation + bootstrap CIs | 🚧 |
 | Grad-CAM interpretability | 🚧 |
 
