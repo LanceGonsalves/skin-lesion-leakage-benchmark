@@ -141,18 +141,52 @@ head-to-head model comparison valid.
 didn't know about `lesion_id`; it found those pairs purely from pixels. That independent
 agreement is a strong precision signal.
 
-The one undeclared pair (`ISIC_0025226` ~ `ISIC_0030074`, both `nv`, lesions `HAM_0004919`
-and `HAM_0000140`) sits at Hamming distance 12 — exactly the threshold — so it is a
-**likely false positive** pending manual review of `reports/figures/duplicate_pairs.png`.
-It is merged into the grouped split regardless: 7,470 lesions become 7,469 effective groups.
-Erring toward over-merging is the conservative choice, since a false merge costs a little
-data while a missed duplicate corrupts the benchmark.
+**The one undeclared pair is a genuine finding.** `ISIC_0025226` and `ISIC_0030074` are
+filed under different lesions (`HAM_0004919`, `HAM_0000140`) but visual inspection shows
+the same mole outline, the same satellite freckles in the same positions, and the same
+hair strand — differing only in white balance:
 
-> ⚠️ **Caveat:** pHash only catches near-identical pixels. Two photographs of the same
-> lesion from meaningfully different angles will not be caught. The embedding-similarity
-> pass (`--embeddings`) targets exactly that case and is the next audit step.
+<p align="center">
+  <img src="reports/figures/duplicate_pairs.png" width="70%">
+</p>
 
-### 5 · The leakage experiment
+It sat at Hamming distance 12, exactly the threshold, and my first instinct was to call it
+a false positive. Looking at the pixels showed otherwise. **This is why the contact sheet
+exists** — threshold proximity is not evidence of anything on its own. The pair is merged
+into the grouped split: 7,470 lesions become 7,469 effective groups.
+
+### 5 · Embedding similarity finds more candidates — most of them probably spurious
+
+`--embeddings` (ResNet-50 features, cosine ≥ 0.98) returned **63 pairs: 44 declared,
+19 undeclared**. Nineteen undeclared pairs would be a much bigger finding than pHash's one.
+Three diagnostics suggest most are false positives:
+
+| Signal | Observation | Reading |
+|---|---|---|
+| Similarity spread | All 19 fall in **0.9801–0.9847** | Hugging the cutoff, not confidently similar |
+| Class composition | **18 of 19 are `nv`~`nv`** | `nv` is 67% of the data and visually homogeneous |
+| Pair structure | `ISIC_0032452` appears in **5** different pairs | A true duplicate has one partner, not five |
+
+A "hub" image matching five unrelated lesions is the signature of a generic-looking image,
+not a duplicate. ImageNet embeddings encode *"round brown lesion on pale skin"* — a
+description that fits thousands of `nv` images that are genuinely distinct.
+
+Use `--sweep` to see how the candidate count and the declared rate move with the threshold,
+rather than picking one by eye:
+
+```bash
+python -m src.data.audit --embeddings --sweep --contact-sheet
+```
+
+A **high declared rate** (most hits being pairs the metadata already groups) means the
+detector is finding real duplicates. A low rate at a loose threshold means it is finding
+lookalikes. Manual verification via the contact sheet is still the arbiter.
+
+> ⚠️ **Method note:** pHash catches near-identical pixels but misses the same lesion shot
+> from a different angle. Embeddings catch angle changes but over-fire on homogeneous
+> classes. Neither is sufficient alone, and neither output is ground truth.
+
+### 6 · The leakage experiment
 
 > 🚧 *In progress — same model, both splits. The gap is the result.*
 
@@ -222,8 +256,8 @@ Step 4 prints the empirical leakage measurement:
 |---|---|
 | Dataset verification | ✅ run on real data |
 | Metadata profiling | ✅ run on real data |
-| Duplicate audit — pHash | ✅ 25 pairs found |
-| Duplicate audit — embeddings | 🚧 next |
+| Duplicate audit — pHash | ✅ 25 pairs, 1 verified undeclared |
+| Duplicate audit — embeddings | ✅ 63 pairs, 19 undeclared (mostly spurious) |
 | Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
 | Model training | 🚧 |
 | Evaluation + bootstrap CIs | 🚧 |

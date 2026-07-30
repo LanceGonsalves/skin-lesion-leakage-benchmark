@@ -278,6 +278,85 @@ def build_duplicate_groups(pairs: pd.DataFrame) -> dict[str, str]:
     return {img: find(img) for img in parent}
 
 
+def merge_with_existing(new_pairs: pd.DataFrame, out_csv: Path) -> pd.DataFrame:
+    """Accumulate findings across runs instead of clobbering them.
+
+    Each detector is normally run in a separate invocation (pHash is cheap, embeddings
+    are slow). Writing only the current run's results would silently discard the other
+    detector's findings -- which is exactly the kind of quiet data loss this project is
+    about. Pairs are deduplicated on (image_id_a, image_id_b, method), so re-running a
+    detector refreshes its own rows and leaves the other's intact.
+    """
+    if not out_csv.exists():
+        return new_pairs
+
+    try:
+        existing = pd.read_csv(out_csv)
+    except Exception as exc:
+        print(f"⚠ Could not read existing {out_csv.name} ({exc}) — starting fresh")
+        return new_pairs
+
+    if existing.empty:
+        return new_pairs
+
+    methods_now = set(new_pairs["method"].unique()) if not new_pairs.empty else set()
+    kept = existing[~existing["method"].isin(methods_now)] if "method" in existing else existing
+
+    if not kept.empty:
+        print(f"  Kept {len(kept):,} pair(s) from previous run(s): "
+              f"{', '.join(sorted(kept['method'].unique()))}")
+
+    combined = pd.concat([kept, new_pairs], ignore_index=True)
+    return combined.drop_duplicates(subset=["image_id_a", "image_id_b", "method"])
+
+
+def sweep_cosine_threshold(ids: list[str], embeddings: np.ndarray, meta: pd.DataFrame,
+                           thresholds: tuple[float, ...] = (0.98, 0.985, 0.99, 0.995, 0.999),
+                           group_col: str = "lesion_id",
+                           id_col: str = "image_id") -> pd.DataFrame:
+    """Report how the candidate count varies with the similarity threshold.
+
+    Choosing a threshold by eye invites motivated reasoning. This makes the trade-off
+    explicit. The useful diagnostic is the *declared* rate: pairs the metadata already
+    groups under one lesion are known-correct detections, so a threshold at which most
+    hits are declared is one where the detector is behaving. If undeclared pairs
+    dominate at a loose threshold, they are probably visually-similar-but-distinct
+    lesions rather than discoveries.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    lookup = meta.set_index(id_col)[group_col]
+    k = min(6, len(ids))
+    nn = NearestNeighbors(n_neighbors=k, metric="cosine").fit(embeddings)
+    distances, indices = nn.kneighbors(embeddings)
+
+    rows = []
+    for threshold in thresholds:
+        seen: set[tuple[int, int]] = set()
+        declared = undeclared = 0
+        for i in range(len(ids)):
+            for dist, j in zip(distances[i], indices[i]):
+                if i == j or (1.0 - float(dist)) < threshold:
+                    continue
+                key = (min(i, j), max(i, j))
+                if key in seen:
+                    continue
+                seen.add(key)
+                if lookup.get(ids[key[0]]) == lookup.get(ids[key[1]]):
+                    declared += 1
+                else:
+                    undeclared += 1
+        total = declared + undeclared
+        rows.append({
+            "threshold": threshold,
+            "pairs": total,
+            "declared": declared,
+            "undeclared": undeclared,
+            "declared_rate": round(declared / total, 3) if total else float("nan"),
+        })
+    return pd.DataFrame(rows)
+
+
 def make_contact_sheet(pairs: pd.DataFrame, image_paths: dict[str, Path],
                        out_path: Path, max_pairs: int = 20) -> Path | None:
     """Render candidate pairs side by side for manual verification.
@@ -337,6 +416,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--phash", action="store_true", help="run perceptual-hash detection")
     parser.add_argument("--embeddings", action="store_true", help="run embedding-similarity detection")
     parser.add_argument("--contact-sheet", action="store_true", help="render pairs for manual review")
+    parser.add_argument("--sweep", action="store_true",
+                        help="report candidate counts across cosine thresholds (needs --embeddings)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="discard previous findings instead of merging with them")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
@@ -385,6 +468,19 @@ def main(argv: list[str] | None = None) -> int:
               f"{cfg.get('audit.embedding.cosine_threshold')}): {len(pairs):,}")
         frames.append(pairs)
 
+        if args.sweep:
+            print("\nThreshold sensitivity:")
+            sweep = sweep_cosine_threshold(
+                ids, embeddings, meta,
+                group_col=cfg.get("dataset.group_col", "lesion_id"),
+                id_col=cfg.get("dataset.id_col", "image_id"),
+            )
+            print(sweep.to_string(index=False))
+            print("\n  'declared_rate' = share of hits the metadata already groups as one")
+            print("  lesion. These are known-correct detections, so a HIGH declared rate")
+            print("  means the detector is finding real duplicates. A LOW rate at a loose")
+            print("  threshold suggests visually-similar-but-distinct lesions.")
+
     all_pairs = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     all_pairs = annotate_pairs(
         all_pairs, meta,
@@ -395,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
 
     reports_dir.mkdir(parents=True, exist_ok=True)
     out_csv = reports_dir / "duplicates.csv"
+    if not args.overwrite:
+        all_pairs = merge_with_existing(all_pairs, out_csv)
     all_pairs.to_csv(out_csv, index=False)
 
     print()
@@ -403,6 +501,13 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 62)
     print(f"  Total candidate pairs          : {len(all_pairs):,}")
     if not all_pairs.empty:
+        if all_pairs["method"].nunique() > 1:
+            print("\n  by method:")
+            breakdown = pd.crosstab(all_pairs["method"], all_pairs["same_lesion"])
+            breakdown.columns = ["undeclared" if c is False else "declared"
+                                 for c in breakdown.columns]
+            print("    " + breakdown.to_string().replace("\n", "\n    "))
+            print()
         declared = int(all_pairs["same_lesion"].sum())
         undeclared = int((~all_pairs["same_lesion"]).sum())
         print(f"  Already declared (same lesion) : {declared:,}")
