@@ -79,7 +79,19 @@ The images are **CC BY-NC licensed and not redistributed here.** Download them y
 - **Harvard Dataverse** — [DOI 10.7910/DVN/DBW86T](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/DBW86T)
 - **Kaggle** — `kmader/skin-cancer-mnist-ham10000` (convenient if you want free GPU alongside)
 
-Place `HAM10000_metadata.csv` and the image files under `data/raw/`.
+**If you downloaded from Dataverse** you'll get a `dataverse_files` folder containing zipped
+image parts and a metadata file with no extension (Dataverse serves it tab-separated). One
+command normalises it:
+
+```bash
+python -m src.data.setup_dataverse ~/Downloads/dataverse_files
+# add --move to delete the ~3 GB of zips afterwards
+```
+
+**If you downloaded from Kaggle**, place `HAM10000_metadata.csv` and the image folders under
+`data/raw/` and run `python -m src.data.download --flatten`.
+
+Either way you should end up with `data/raw/HAM10000_metadata.csv` and `data/raw/images/`.
 
 ## Quickstart
 
