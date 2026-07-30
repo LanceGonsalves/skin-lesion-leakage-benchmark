@@ -85,10 +85,43 @@ Place `HAM10000_metadata.csv` and the image files under `data/raw/`.
 
 ```bash
 pip install -r requirements.txt
-python -m src.data.download --check     # verify the dataset is present and intact
+
+# 1. verify the download (also prints the redundancy that motivates the project)
+python -m src.data.download --check
+python -m src.data.download --flatten          # merge part_1/part_2 into images/
+
+# 2. profile the metadata — class imbalance + images-per-lesion figures
+python -m src.data.profile
+
+# 3. audit for duplicates the metadata doesn't declare
+python -m src.data.audit --phash --contact-sheet
+python -m src.data.audit --embeddings          # slower, semantic near-duplicates
+
+# 4. build both splits and measure contamination in each
+python -m src.data.splits
+
+# tests — incl. the assertion that no lesion spans two partitions
+python -m pytest -q
 ```
 
-More commands land as the pipeline is built out.
+Step 4 prints the empirical leakage measurement:
+
+```
+  Naive split test contamination  : XX.X%
+  Grouped split test contamination:  0.0%
+```
+
+### Pipeline status
+
+| Stage | Status |
+|---|---|
+| Dataset verification | ✅ |
+| Metadata profiling | ✅ |
+| Duplicate audit (pHash + embeddings) | ✅ |
+| Split construction + leakage tests | ✅ |
+| Model training | 🚧 next |
+| Evaluation + bootstrap CIs | 🚧 |
+| Grad-CAM interpretability | 🚧 |
 
 ## Repo layout
 
