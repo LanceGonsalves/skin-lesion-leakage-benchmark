@@ -420,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="report candidate counts across cosine thresholds (needs --embeddings)")
     parser.add_argument("--overwrite", action="store_true",
                         help="discard previous findings instead of merging with them")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="recompute embeddings even if a matching cache exists")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
@@ -451,14 +453,32 @@ def main(argv: list[str] | None = None) -> int:
         frames.append(pairs)
 
     if args.embeddings:
-        ids, embeddings = compute_embeddings(
-            image_paths,
-            backbone=cfg.get("audit.embedding.backbone", "resnet50"),
-            batch_size=int(cfg.get("audit.embedding.batch_size", 64)),
-            image_size=int(cfg.get("audit.embedding.image_size", 224)),
-        )
-        np.save(cache_dir / "embeddings.npy", embeddings)
-        pd.Series(ids).to_csv(cache_dir / "embedding_ids.csv", index=False, header=["image_id"])
+        # Feature extraction is the expensive step (~10 min on CPU for 10k images) and
+        # is deterministic, so reuse the cache when it matches the current image set.
+        # Tuning the threshold then costs seconds instead of a re-run.
+        embeddings_cache = cache_dir / "embeddings.npy"
+        ids_cache = cache_dir / "embedding_ids.csv"
+        ids = embeddings = None
+
+        if not args.no_cache and embeddings_cache.exists() and ids_cache.exists():
+            cached_ids = pd.read_csv(ids_cache)["image_id"].astype(str).tolist()
+            if set(cached_ids) == set(image_paths):
+                ids = cached_ids
+                embeddings = np.load(embeddings_cache)
+                print(f"Reusing cached embeddings for {len(ids):,} images "
+                      f"(--no-cache to recompute)")
+            else:
+                print("Cached embeddings do not match the images on disk — recomputing")
+
+        if embeddings is None:
+            ids, embeddings = compute_embeddings(
+                image_paths,
+                backbone=cfg.get("audit.embedding.backbone", "resnet50"),
+                batch_size=int(cfg.get("audit.embedding.batch_size", 64)),
+                image_size=int(cfg.get("audit.embedding.image_size", 224)),
+            )
+            np.save(embeddings_cache, embeddings)
+            pd.Series(ids).to_csv(ids_cache, index=False, header=["image_id"])
         pairs = embedding_candidate_pairs(
             ids, embeddings,
             threshold=float(cfg.get("audit.embedding.cosine_threshold", 0.98)),

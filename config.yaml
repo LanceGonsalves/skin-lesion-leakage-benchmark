@@ -28,7 +28,12 @@ audit:
     backbone: resnet50                    # ImageNet-pretrained feature extractor
     batch_size: 64
     image_size: 224
-    cosine_threshold: 0.98                # >= this cosine similarity = candidate pair
+    # 0.985, not 0.98. Chosen from the sweep in reports/, not by eye: at 0.980 the
+    # detector returns 19 "undeclared" pairs that all sit in the 0.9801-0.9847 band and
+    # are, on inspection, distinct nevi that merely look alike. Every one disappears by
+    # 0.985, above which 100% of hits are pairs the metadata independently confirms as
+    # the same lesion. Reproduce with: python -m src.data.audit --embeddings --sweep
+    cosine_threshold: 0.985
     n_neighbours: 5
 
 # --- splits ------------------------------------------------------------------

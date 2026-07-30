@@ -155,11 +155,13 @@ a false positive. Looking at the pixels showed otherwise. **This is why the cont
 exists** — threshold proximity is not evidence of anything on its own. The pair is merged
 into the grouped split: 7,470 lesions become 7,469 effective groups.
 
-### 5 · Embedding similarity finds more candidates — most of them probably spurious
+### 5 · Embedding similarity: 19 apparent discoveries that were all false positives
 
-`--embeddings` (ResNet-50 features, cosine ≥ 0.98) returned **63 pairs: 44 declared,
-19 undeclared**. Nineteen undeclared pairs would be a much bigger finding than pHash's one.
-Three diagnostics suggest most are false positives:
+At cosine ≥ 0.98, ResNet-50 embeddings returned **63 pairs: 44 declared, 19 undeclared**.
+Nineteen undeclared duplicates would have been a far bigger finding than pHash's one — and
+it would have been wrong.
+
+Three diagnostics raised suspicion before any conclusion was drawn:
 
 | Signal | Observation | Reading |
 |---|---|---|
@@ -167,24 +169,43 @@ Three diagnostics suggest most are false positives:
 | Class composition | **18 of 19 are `nv`~`nv`** | `nv` is 67% of the data and visually homogeneous |
 | Pair structure | `ISIC_0032452` appears in **5** different pairs | A true duplicate has one partner, not five |
 
-A "hub" image matching five unrelated lesions is the signature of a generic-looking image,
-not a duplicate. ImageNet embeddings encode *"round brown lesion on pale skin"* — a
-description that fits thousands of `nv` images that are genuinely distinct.
+A threshold sweep settled it. `--sweep` reports, at each cutoff, what fraction of hits are
+pairs the metadata *independently* confirms as one lesion — those are known-correct
+detections, so the declared rate is a proxy for precision:
 
-Use `--sweep` to see how the candidate count and the declared rate move with the threshold,
-rather than picking one by eye:
+| threshold | pairs | declared | undeclared | declared rate |
+|---:|---:|---:|---:|---:|
+| 0.980 | 63 | 44 | **19** | 0.698 |
+| **0.985** | **24** | **24** | **0** | **1.000** |
+| 0.990 | 8 | 8 | 0 | 1.000 |
+| 0.995 | 4 | 4 | 0 | 1.000 |
+| 0.999 | 2 | 2 | 0 | 1.000 |
+
+**Every one of the 19 disappears between 0.980 and 0.985.** Above 0.985 the detector agrees
+with the metadata 100% of the time. They were not duplicates; they were distinct nevi
+sitting in a narrow noise band, where ImageNet features stop encoding *this lesion* and
+start encoding *"round brown lesion on pale skin"* — a description fitting thousands of
+genuinely different images.
+
+Visual inspection confirmed it: the 19 pairs show visibly different moles that share only
+their general appearance and imaging setup — nothing like the freckle-for-freckle match of
+the verified pHash pair.
+
+**The threshold is therefore set to 0.985** (`config.yaml`), chosen from this sweep rather
+than by eye. At that setting the embedding detector contributes 24 pairs, all confirmed, and
+adds no new undeclared duplicates. The effective grouping stands at **7,469 groups from
+7,470 lesions** — the single pHash-verified pair.
+
+> ⚠️ **Method note:** pHash catches near-identical pixels but misses the same lesion shot
+> from a different angle. Embeddings catch angle changes but over-fire on homogeneous
+> classes. Neither is sufficient alone, and neither output is ground truth — which is why
+> every undeclared candidate is verified by eye before it changes a split.
+
+Reproduce the sweep (embeddings are cached, so it takes seconds after the first run):
 
 ```bash
 python -m src.data.audit --embeddings --sweep --contact-sheet
 ```
-
-A **high declared rate** (most hits being pairs the metadata already groups) means the
-detector is finding real duplicates. A low rate at a loose threshold means it is finding
-lookalikes. Manual verification via the contact sheet is still the arbiter.
-
-> ⚠️ **Method note:** pHash catches near-identical pixels but misses the same lesion shot
-> from a different angle. Embeddings catch angle changes but over-fire on homogeneous
-> classes. Neither is sufficient alone, and neither output is ground truth.
 
 ### 6 · The leakage experiment
 
@@ -257,7 +278,7 @@ Step 4 prints the empirical leakage measurement:
 | Dataset verification | ✅ run on real data |
 | Metadata profiling | ✅ run on real data |
 | Duplicate audit — pHash | ✅ 25 pairs, 1 verified undeclared |
-| Duplicate audit — embeddings | ✅ 63 pairs, 19 undeclared (mostly spurious) |
+| Duplicate audit — embeddings | ✅ threshold tuned to 0.985 via sweep |
 | Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
 | Model training | 🚧 |
 | Evaluation + bootstrap CIs | 🚧 |
