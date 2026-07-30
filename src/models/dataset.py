@@ -128,33 +128,66 @@ def build_transforms(image_size: int, train: bool):
     ])
 
 
-def make_dataset(frame: pd.DataFrame, image_dir: Path, classes: list[str],
+class SkinLesionDataset:
+    """Map-style dataset over one partition of a split.
+
+    Defined at module level, and holding only picklable state (lists, a Path, ints,
+    bools), because macOS starts DataLoader workers with `spawn` -- which pickles the
+    dataset. A class nested inside a factory function cannot be pickled and fails the
+    moment num_workers > 0.
+
+    The torchvision transform is built lazily, per worker, rather than stored on the
+    instance. That keeps the pickled payload tiny and avoids importing torch when this
+    module is merely imported for its (torch-free) imbalance helpers.
+
+    DataLoader accepts any object implementing __len__/__getitem__, so there is no need
+    to subclass torch.utils.data.Dataset and pull torch into module import.
+    """
+
+    def __init__(self, image_ids: list[str], targets: list[int], image_dir: Path,
                  image_size: int, train: bool):
-    """Build a torch Dataset over the rows of a split partition."""
-    from PIL import Image
-    from torch.utils.data import Dataset
+        self.image_ids = list(image_ids)
+        self.targets = list(targets)
+        self.image_dir = Path(image_dir)
+        self.image_size = int(image_size)
+        self.train = bool(train)
+        self._transform = None      # built on first access, in whichever process uses it
 
-    transform = build_transforms(image_size, train=train)
+    @property
+    def transform(self):
+        if self._transform is None:
+            self._transform = build_transforms(self.image_size, train=self.train)
+        return self._transform
+
+    def __len__(self) -> int:
+        return len(self.image_ids)
+
+    def __getitem__(self, idx: int):
+        from PIL import Image
+
+        path = self.image_dir / f"{self.image_ids[idx]}.jpg"
+        with Image.open(path) as img:
+            tensor = self.transform(img.convert("RGB"))
+        return tensor, self.targets[idx]
+
+    def __getstate__(self):
+        # Never ship a built transform across the process boundary.
+        state = self.__dict__.copy()
+        state["_transform"] = None
+        return state
+
+
+def make_dataset(frame: pd.DataFrame, image_dir: Path, classes: list[str],
+                 image_size: int, train: bool) -> SkinLesionDataset:
+    """Build a dataset over the rows of a split partition."""
     class_index = {cls: i for i, cls in enumerate(classes)}
-
-    image_ids = frame["image_id"].tolist()
-    targets = [class_index[label] for label in frame["dx"]]
-
-    class _SkinLesionDataset(Dataset):
-        def __init__(self):
-            self.image_ids = image_ids
-            self.targets = targets
-
-        def __len__(self) -> int:
-            return len(self.image_ids)
-
-        def __getitem__(self, idx: int):
-            path = image_dir / f"{self.image_ids[idx]}.jpg"
-            with Image.open(path) as img:
-                tensor = transform(img.convert("RGB"))
-            return tensor, self.targets[idx]
-
-    return _SkinLesionDataset()
+    return SkinLesionDataset(
+        image_ids=frame["image_id"].tolist(),
+        targets=[class_index[label] for label in frame["dx"]],
+        image_dir=image_dir,
+        image_size=image_size,
+        train=train,
+    )
 
 
 def make_loader(frame: pd.DataFrame, image_dir: Path, classes: list[str],

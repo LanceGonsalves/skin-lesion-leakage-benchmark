@@ -129,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="which split to train on (this is the experiment's variable)")
     parser.add_argument("--smoke-test", action="store_true",
                         help="tiny subset, 1 epoch per stage — verifies the pipeline runs")
+    parser.add_argument("--num-workers", type=int, default=None,
+                        help="override config; use 0 if DataLoader workers misbehave")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
@@ -166,7 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     strategy = cfg.get("train.imbalance_strategy", "class_weights")
     batch_size = int(cfg.get("train.batch_size", 32))
     image_size = int(cfg.get("model.image_size", 224))
-    num_workers = 0 if args.smoke_test else int(cfg.get("train.num_workers", 4))
+    if args.num_workers is not None:
+        num_workers = args.num_workers
+    elif args.smoke_test:
+        num_workers = 0
+    else:
+        num_workers = int(cfg.get("train.num_workers", 4))
 
     train_loader = make_loader(train_df, image_dir, classes, image_size, batch_size,
                                train=True, imbalance_strategy=strategy,
