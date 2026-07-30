@@ -1,0 +1,68 @@
+# Skin Lesion Leakage Benchmark — central configuration.
+# Every script reads from here so experiments stay reproducible and comparable.
+
+seed: 42
+
+paths:
+  raw_dir: data/raw                       # HAM10000 images + metadata (gitignored)
+  metadata: data/raw/HAM10000_metadata.csv
+  splits_dir: data/splits
+  cache_dir: data/cache                   # hashes / embeddings (regenerable)
+  reports_dir: reports
+  figures_dir: reports/figures
+
+dataset:
+  name: HAM10000
+  n_images_expected: 10015
+  label_col: dx
+  group_col: lesion_id                    # THE column that makes honest splitting possible
+  id_col: image_id
+  classes: [akiec, bcc, bkl, df, mel, nv, vasc]
+
+# --- duplicate detection -----------------------------------------------------
+audit:
+  phash:
+    hash_size: 16                         # 16x16 -> 256-bit hash
+    max_hamming: 12                       # <= this distance counts as a candidate pair
+  embedding:
+    backbone: resnet50                    # ImageNet-pretrained feature extractor
+    batch_size: 64
+    image_size: 224
+    cosine_threshold: 0.98                # >= this cosine similarity = candidate pair
+    n_neighbours: 5
+
+# --- splits ------------------------------------------------------------------
+# Two splits are built deliberately. Split A is the "wrong" one, kept on purpose
+# as the baseline; Split B is the honest one. Same ratios, same seed, same
+# stratification -- the ONLY difference is whether lesion groups are respected.
+splits:
+  test_size: 0.15
+  val_size: 0.15                          # fraction of the full dataset
+  naive_name: split_naive.csv             # Split A: random at image level (leaky)
+  grouped_name: split_grouped.csv         # Split B: grouped by lesion_id (honest)
+  merge_discovered_duplicates: true       # fold audit findings into the groups
+
+# --- model -------------------------------------------------------------------
+model:
+  backbone: efficientnet_b0               # timm name; resnet50 used as baseline
+  pretrained: true
+  image_size: 224
+  dropout: 0.2
+
+train:
+  batch_size: 32
+  epochs_head: 3                          # stage 1: frozen backbone
+  epochs_finetune: 12                     # stage 2: unfrozen, low LR
+  lr_head: 0.001
+  lr_finetune: 0.0001
+  weight_decay: 0.0001
+  imbalance_strategy: class_weights       # class_weights | weighted_sampler | none
+  early_stopping_patience: 4
+  monitor: val_balanced_accuracy
+  num_workers: 4
+  mixed_precision: true
+
+eval:
+  bootstrap_iterations: 1000              # for confidence intervals
+  confidence_level: 0.95
+  primary_metric: balanced_accuracy

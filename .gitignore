@@ -1,0 +1,42 @@
+# Dataset — CC BY-NC licensed, not redistributable. See README for download instructions.
+data/raw/
+*.jpg
+*.jpeg
+*.png
+!reports/figures/*.png
+
+# Model artefacts
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Cached embeddings / hashes (regenerable)
+data/cache/
+*.npy
+*.npz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+*.egg-info/
+.pytest_cache/
+
+# Notebooks: keep outputs out of diffs where possible
+# (strip with nbstripout if installed)
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+logs/
+runs/
+wandb/
+*.log
