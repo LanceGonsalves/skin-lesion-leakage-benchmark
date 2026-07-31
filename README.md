@@ -276,6 +276,62 @@ validation **balanced accuracy** — not accuracy, which would have selected epo
 The frozen stage plateaued at 0.29 balanced accuracy; unfreezing reached 0.72. Fine-tuning
 the features, not the head, did the work.
 
+### 7 · The model is systematically overconfident
+
+`python -m src.explain --split grouped`
+
+| | |
+|---|---:|
+| Mean confidence | **0.808** |
+| Actual accuracy | **0.693** |
+| **Expected Calibration Error** | **0.116** |
+
+It claims 81% confidence and is right 69% of the time. Reading the reliability bins, the
+miscalibration is worst in the middle of the range:
+
+| confidence bin | n | mean confidence | accuracy | gap |
+|---|---:|---:|---:|---:|
+| 0.5 – 0.6 | 193 | 0.549 | 0.383 | **−0.166** |
+| 0.6 – 0.7 | 150 | 0.651 | 0.453 | **−0.198** |
+| 0.7 – 0.8 | 168 | 0.746 | 0.548 | −0.198 |
+| 0.8 – 0.9 | 172 | 0.851 | 0.651 | −0.200 |
+| 0.9 – 1.0 | 842 | 0.982 | 0.910 | −0.072 |
+
+Half the test set (842 images) lands in the top bin, where the model is *relatively* well
+calibrated. But a prediction made at "65% confidence" is right only 45% of the time —
+worse than the confidence implies, and in the range where a clinician might reasonably
+defer to it. Temperature scaling on the validation set would be the standard fix.
+
+<p align="center">
+  <img src="reports/figures/reliability_grouped.png" width="52%">
+</p>
+
+### 8 · Grad-CAM: attending to lesions, with one instructive failure
+
+The concern going in was shortcut learning — models latching onto rulers, ink marks or
+lens vignetting rather than the lesion. **Mostly that isn't happening**: attention is
+centred on the lesion in nearly every sampled case, correct and incorrect alike.
+
+One misclassification is the exception, and it's the most informative image in the set:
+the heatmap forms a **ring around** the lesion, with the lesion itself cold and the
+surrounding skin hot. The model predicted `mel` (0.32 confidence) on a `bkl` — while
+looking at everything except the thing it was asked to classify.
+
+<p align="center">
+  <img src="reports/figures/gradcam_correct_grouped.png" width="42%">
+  <img src="reports/figures/gradcam_misclassified_grouped.png" width="42%">
+</p>
+
+Misclassifications also cluster at low confidence (0.32–0.56) versus correct predictions
+spanning 0.41–0.98 — consistent with the calibration analysis: the model is overconfident,
+but not entirely unaware of when it's guessing.
+
+> **Note on an earlier version of this figure:** the first run sampled the first N test
+> images the loader produced. Evaluation loaders aren't shuffled, so every panel showed
+> the same class (`bkl`) while appearing to be a representative sample. Examples are now
+> drawn round-robin across true classes, and the rendered classes are printed alongside
+> the figure path so the sample can be checked rather than assumed.
+
 ## Dataset
 
 **HAM10000** — Tschandl, Rosendahl & Kittler, *Scientific Data* (2018).
@@ -354,7 +410,7 @@ Step 4 prints the empirical leakage measurement:
 | Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
 | Model training | ✅ both splits trained |
 | Evaluation + bootstrap CIs | ✅ **+10.3 pp leakage effect** |
-| Grad-CAM + calibration | ✅ built, 🚧 runs pending |
+| Grad-CAM + calibration | ✅ ECE 0.116, no shortcut learning |
 
 **37 tests pass**, including that balanced accuracy collapses to 1/n for a
 majority-class-only predictor, that the trainer's metric matches scikit-learn exactly, that
@@ -384,6 +440,8 @@ skin-lesion-leakage-benchmark/
 - Automated duplicate detection produces false positives; flagged pairs are manually verified on
   a sample and detector precision is reported rather than assumed.
 - Single train/val/test split rather than full cross-validation, for compute reasons.
+- The model is overconfident (ECE 0.116) and uncalibrated; temperature scaling on the
+  validation set is the obvious next step and is not applied here.
 
 ## References
 

@@ -174,8 +174,9 @@ def plot_cam_grid(records: list[dict], out_path: Path, title: str) -> Path | Non
         for col in (0, 1):
             axes[row, col].set_xticks([]); axes[row, col].set_yticks([])
 
-    fig.suptitle(title, fontsize=10)
-    fig.tight_layout()
+    fig.suptitle(title, fontsize=11, y=0.997)
+    # Leave headroom for the suptitle, otherwise it collides with the first row's titles.
+    fig.tight_layout(rect=(0, 0, 1, 0.985))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
@@ -228,8 +229,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- collect predictions + keep a few images for Grad-CAM ---------------------
     all_conf, all_correct, all_true, all_pred = [], [], [], []
-    correct_examples: list[tuple] = []
-    wrong_examples: list[tuple] = []
+    # Keyed by (outcome, true_class) so the rendered examples span the label space.
+    # Taking the first N examples instead yields whatever the (unshuffled) loader emits
+    # first -- in practice a single class, which makes the figure look representative
+    # while showing nothing of the sort.
+    pools: dict[tuple[str, int], list[tuple]] = {}
+    per_class_cap = max(1, args.n_samples)
 
     with torch.no_grad():
         for images, targets in loader:
@@ -244,10 +249,28 @@ def main(argv: list[str] | None = None) -> int:
             all_pred.append(prediction.numpy())
 
             for i in range(len(targets)):
-                bucket = correct_examples if hit[i] else wrong_examples
-                if len(bucket) < args.n_samples:
-                    bucket.append((images[i], int(targets[i]), int(prediction[i]),
-                                   float(confidence[i])))
+                key = ("correct" if hit[i] else "misclassified", int(targets[i]))
+                pool = pools.setdefault(key, [])
+                if len(pool) < per_class_cap:
+                    pool.append((images[i], int(targets[i]), int(prediction[i]),
+                                 float(confidence[i])))
+
+    def stratified_sample(outcome: str, n_wanted: int) -> list[tuple]:
+        """Round-robin across true classes so no single class dominates the figure."""
+        by_class = {cls: pools.get((outcome, cls), []) for cls in range(len(classes))}
+        chosen: list[tuple] = []
+        depth = 0
+        while len(chosen) < n_wanted and any(len(v) > depth for v in by_class.values()):
+            for cls in range(len(classes)):
+                if len(chosen) >= n_wanted:
+                    break
+                if len(by_class[cls]) > depth:
+                    chosen.append(by_class[cls][depth])
+            depth += 1
+        return chosen
+
+    correct_examples = stratified_sample("correct", args.n_samples)
+    wrong_examples = stratified_sample("misclassified", args.n_samples)
 
     confidences = np.concatenate(all_conf)
     correct = np.concatenate(all_correct).astype(float)
@@ -305,12 +328,14 @@ def main(argv: list[str] | None = None) -> int:
                 "confidence": bucket[i][3],
             } for i in range(len(bucket))]
 
+            covered = sorted({classes[item[1]] for item in bucket})
             path = plot_cam_grid(
                 records, figures_dir / f"gradcam_{label}_{args.split}.png",
                 f"Grad-CAM — {label} ({args.split} split)",
             )
             if path:
                 print(f"  {label}: {path}")
+                print(f"    classes shown: {', '.join(covered)}")
 
         print("\n  Look for attention on rulers, ink marks, hair or vignetting rather than")
         print("  the lesion — that is shortcut learning, and it will not transfer.")
