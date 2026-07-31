@@ -1,0 +1,13 @@
+{
+  "split": "grouped",
+  "split_file": "split_grouped.csv",
+  "backbone": "efficientnet_b0",
+  "imbalance_strategy": "class_weights",
+  "seed": 42,
+  "device": "mps",
+  "n_train": 6650,
+  "n_val": 1659,
+  "best_val_balanced_accuracy": 0.716261656719933,
+  "epochs_run": 12,
+  "smoke_test": false
+}

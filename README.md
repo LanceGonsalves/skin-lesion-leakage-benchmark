@@ -7,7 +7,8 @@
 
 <p align="center">
   <b>On HAM10000, a standard random train/test split leaves 40.6% of the "held-out"<br>
-  test set showing lesions the model already trained on.</b>
+  test set showing lesions the model already trained on — inflating reported<br>
+  balanced accuracy by 10.3 points and melanoma recall by 15.8.</b>
 </p>
 
 <p align="center">
@@ -207,15 +208,73 @@ Reproduce the sweep (embeddings are cached, so it takes seconds after the first 
 python -m src.data.audit --embeddings --sweep --contact-sheet
 ```
 
-### 6 · The leakage experiment
+### 6 · The leakage effect: +10.3 points of balanced accuracy
 
-> 🚧 *In progress — same model, both splits. The gap is the result.*
+An EfficientNet-B0, ImageNet-pretrained, trained twice. Identical backbone,
+hyperparameters, augmentation, class weighting, schedule and seed. **The split is the
+only variable.**
 
-| | Split A (naive) | Split B (grouped) | Δ |
-|---|---|---|---|
-| Balanced accuracy | — | — | — |
-| Macro F1 | — | — | — |
-| Melanoma recall | — | — | — |
+| metric | Split A (naive) | Split B (grouped) | Δ |
+|---|---:|---:|---:|
+| Accuracy | 0.7412 | 0.6928 | **+0.048** |
+| **Balanced accuracy** | **0.7566** | **0.6536** | **+0.103** |
+| Macro F1 | 0.6740 | 0.5388 | **+0.135** |
+
+95% bootstrap CIs on balanced accuracy: naive **[0.711, 0.797]**, grouped
+**[0.603, 0.703]**. The intervals are **disjoint**, so the gap is not sampling noise.
+
+#### The clinically important number
+
+Balanced accuracy is the headline, but per-class recall is where it bites:
+
+| class | naive recall | grouped recall | Δ |
+|---|---:|---:|---:|
+| **mel** (melanoma) | **0.6527** | **0.4950** | **+0.158** |
+| akiec | 0.7347 | 0.5870 | +0.148 |
+| bcc | 0.8831 | 0.7453 | +0.138 |
+| df | 0.7059 | 0.5500 | +0.156 |
+| vasc | 0.9091 | 0.8333 | +0.076 |
+| bkl | 0.6545 | 0.6231 | +0.031 |
+| nv | 0.7565 | 0.7413 | +0.015 |
+
+**A leaky evaluation reports that the model catches 65% of melanomas. Evaluated honestly,
+it catches 50%.** A clinician told the first number would draw a very different conclusion
+from one told the second.
+
+Note the pattern: the inflation is largest on the **rare** classes and smallest on `nv`,
+the 67% majority. Rare classes have fewer distinct lesions, so a duplicate leaking into the
+test set is a proportionally much bigger gift — exactly where a naive split flatters a model
+most, and exactly where medical performance matters most.
+
+#### Honest caveats
+
+- **The two test sets are not identical** (1,503 vs 1,706 images) and cannot be. Respecting
+  lesion groups changes which images can be held out. The comparison is therefore *"what
+  you would report using method A versus method B"* — which is precisely the question,
+  but it is not a paired test on fixed data.
+- **The naive split's own CI is too narrow.** Bootstrapping resamples images as if they were
+  independent; in the naive split they are not. Its true uncertainty is wider than quoted —
+  another way that evaluation flatters itself.
+- **Test balanced accuracy (0.654) is below validation (0.716)** on the grouped split. Expected:
+  validation drove model selection and early stopping, so it is optimistically biased. The
+  test figure is the honest one.
+- **Single split, single seed.** Group-aware cross-validation would tighten these intervals;
+  it was skipped for compute reasons. Listed under next steps.
+
+<p align="center">
+  <img src="reports/figures/confusion_matrix_grouped.png" width="48%">
+  <img src="reports/figures/confusion_matrix_naive.png" width="48%">
+</p>
+
+#### Training
+
+Two-stage transfer learning: 3 epochs with the backbone frozen (head only, 8,967 of
+4,016,515 parameters), then fine-tuning at a 10× lower learning rate. Early stopping on
+validation **balanced accuracy** — not accuracy, which would have selected epoch 10
+(higher raw accuracy, worse per-class recall, leaning harder on `nv`).
+
+The frozen stage plateaued at 0.29 balanced accuracy; unfreezing reached 0.72. Fine-tuning
+the features, not the head, did the work.
 
 ## Dataset
 
@@ -270,6 +329,9 @@ python -m src.evaluate --split grouped
 python -m src.evaluate --split naive
 python -m src.evaluate --compare        # the headline table
 
+# 7. interpretability: where is it looking, and can we trust its confidence?
+python -m src.explain --split grouped
+
 # tests — incl. the assertion that no lesion spans two partitions
 python -m pytest -q
 ```
@@ -290,13 +352,15 @@ Step 4 prints the empirical leakage measurement:
 | Duplicate audit — pHash | ✅ 25 pairs, 1 verified undeclared |
 | Duplicate audit — embeddings | ✅ threshold tuned to 0.985 via sweep |
 | Split construction + leakage measurement | ✅ 40.6% vs 0.0% |
-| Model training | ✅ built, 🚧 runs pending |
-| Evaluation + bootstrap CIs | ✅ built, 🚧 runs pending |
-| Grad-CAM interpretability | 🚧 |
+| Model training | ✅ both splits trained |
+| Evaluation + bootstrap CIs | ✅ **+10.3 pp leakage effect** |
+| Grad-CAM + calibration | ✅ built, 🚧 runs pending |
 
-**20 tests pass**, including that balanced accuracy collapses to 1/n for a
-majority-class-only predictor, that the trainer's metric matches scikit-learn exactly, and
-that no lesion spans two partitions of the grouped split.
+**37 tests pass**, including that balanced accuracy collapses to 1/n for a
+majority-class-only predictor, that the trainer's metric matches scikit-learn exactly, that
+the dataset survives pickling (macOS `spawn` workers), that ECE is ~0 for a perfectly
+calibrated model and ~0.35 for one claiming 95% while scoring 60%, and that no lesion spans
+two partitions of the grouped split.
 
 ## Repo layout
 

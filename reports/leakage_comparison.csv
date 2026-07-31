@@ -1,0 +1,4 @@
+metric,naive,grouped,delta
+accuracy,0.7412,0.6928,0.0483
+balanced_accuracy,0.7566,0.6536,0.1031
+macro_f1,0.674,0.5388,0.1352
