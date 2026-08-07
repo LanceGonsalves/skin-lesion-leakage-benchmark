@@ -1,0 +1,92 @@
+name: CI
+
+# The dataset is 3 GB and gitignored, so CI cannot train anything. What it *can* do is
+# guard the logic the headline claim depends on: that a grouped split never puts one
+# lesion on both sides, that the metrics are computed correctly, and that the
+# contamination arithmetic is right. Those are exactly the places where a silent bug
+# would invalidate a result rather than crash a run.
+#
+# The import and CLI checks discover modules rather than listing them, so adding a new
+# experiment module gets it covered automatically instead of requiring this file to be
+# edited in lockstep.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # CPU-only torch: the CUDA wheels are ~2.5 GB and nothing here trains.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      # Guards the failure mode that would quietly break everything: a module that no
+      # longer imports means a pipeline stage cannot run, and nobody finds out until
+      # they have downloaded 3 GB and started training.
+      - name: Check every module imports
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, sys
+
+          failed = []
+          for info in pkgutil.walk_packages(["src"], prefix="src."):
+              try:
+                  importlib.import_module(info.name)
+                  print(f"  ok   {info.name}")
+              except Exception as exc:
+                  failed.append(info.name)
+                  print(f"  FAIL {info.name}: {type(exc).__name__}: {exc}")
+
+          if failed:
+              sys.exit(f"{len(failed)} module(s) failed to import: {', '.join(failed)}")
+          PY
+
+      - name: Check the CLIs respond
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, subprocess, sys
+
+          # A module with a main() is a command someone will type. If --help crashes,
+          # the argparse wiring is broken and the run dies before doing any work.
+          clis = []
+          for info in pkgutil.walk_packages(["src"], prefix="src."):
+              mod = importlib.import_module(info.name)
+              if hasattr(mod, "main"):
+                  clis.append(info.name)
+
+          failed = []
+          for name in sorted(clis):
+              proc = subprocess.run([sys.executable, "-m", name, "--help"],
+                                    capture_output=True, text=True)
+              if proc.returncode == 0:
+                  print(f"  ok   {name} --help")
+              else:
+                  failed.append(name)
+                  print(f"  FAIL {name} --help -> exit {proc.returncode}")
+                  print(proc.stderr.strip()[:400])
+
+          if failed:
+              sys.exit(f"{len(failed)} CLI(s) broken: {', '.join(failed)}")
+          print(f"\n{len(clis)} CLI(s) checked")
+          PY

@@ -29,7 +29,12 @@ import numpy as np
 import pandas as pd
 
 from src.config import load_config, set_seed
-from src.models.build import build_model, resolve_device, set_backbone_trainable
+from src.models.build import (
+    build_model,
+    checkpoint_name,
+    resolve_device,
+    set_backbone_trainable,
+)
 from src.models.dataset import (
     assert_no_group_leakage,
     compute_class_weights,
@@ -131,13 +136,22 @@ def main(argv: list[str] | None = None) -> int:
                         help="tiny subset, 1 epoch per stage — verifies the pipeline runs")
     parser.add_argument("--num-workers", type=int, default=None,
                         help="override config; use 0 if DataLoader workers misbehave")
+    # --seed and --backbone exist so the experiment can be *replicated*, not just run.
+    # A single run cannot distinguish a real effect from seed variance, and a single
+    # architecture cannot distinguish a property of the data from a quirk of the model.
+    parser.add_argument("--seed", type=int, default=None,
+                        help="override config seed; use to replicate across seeds")
+    parser.add_argument("--backbone", default=None,
+                        help="override config backbone, e.g. resnet18")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
 
     import torch
 
     cfg = load_config(args.config)
-    set_seed(cfg.seed)
+    seed = args.seed if args.seed is not None else cfg.seed
+    backbone = args.backbone or cfg.get("model.backbone", "efficientnet_b0")
+    set_seed(seed)
     torch.use_deterministic_algorithms(False)   # cuDNN determinism costs too much here
 
     classes = cfg.classes
@@ -177,14 +191,14 @@ def main(argv: list[str] | None = None) -> int:
 
     train_loader = make_loader(train_df, image_dir, classes, image_size, batch_size,
                                train=True, imbalance_strategy=strategy,
-                               num_workers=num_workers, seed=cfg.seed)
+                               num_workers=num_workers, seed=seed)
     val_loader = make_loader(val_df, image_dir, classes, image_size, batch_size,
-                             train=False, num_workers=num_workers, seed=cfg.seed)
+                             train=False, num_workers=num_workers, seed=seed)
 
     # --- model --------------------------------------------------------------------
     device = resolve_device()
     model = build_model(
-        backbone=cfg.get("model.backbone", "efficientnet_b0"),
+        backbone=backbone,
         n_classes=n_classes,
         pretrained=bool(cfg.get("model.pretrained", True)),
         dropout=float(cfg.get("model.dropout", 0.2)),
@@ -201,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\nSplit      : {args.split} ({split_file})")
     print(f"Device     : {device}")
-    print(f"Backbone   : {cfg.get('model.backbone')}")
+    print(f"Backbone   : {backbone}")
+    print(f"Seed       : {seed}")
     print(f"Imbalance  : {strategy}")
     print(f"Train/Val  : {len(train_df):,} / {len(val_df):,}")
 
@@ -212,7 +227,10 @@ def main(argv: list[str] | None = None) -> int:
 
     checkpoint_dir = Path("checkpoints")
     checkpoint_dir.mkdir(exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"{args.split}_best.pt"
+    checkpoint_path = checkpoint_dir / checkpoint_name(
+        args.split, backbone, seed,
+        cfg.get("model.backbone", "efficientnet_b0"), cfg.seed,
+    )
 
     history: list[EpochResult] = []
     best_metric = -np.inf
@@ -252,7 +270,8 @@ def main(argv: list[str] | None = None) -> int:
                 torch.save({
                     "model_state": model.state_dict(),
                     "split": args.split,
-                    "backbone": cfg.get("model.backbone"),
+                    "backbone": backbone,
+                    "seed": seed,
                     "classes": classes,
                     "epoch": epoch_counter,
                     "val_balanced_accuracy": val_bal,
@@ -277,9 +296,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dump({
             "split": args.split,
             "split_file": split_file,
-            "backbone": cfg.get("model.backbone"),
+            "backbone": backbone,
             "imbalance_strategy": strategy,
-            "seed": cfg.seed,
+            "seed": seed,
             "device": device,
             "n_train": len(train_df),
             "n_val": len(val_df),

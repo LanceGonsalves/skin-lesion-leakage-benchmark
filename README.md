@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white">
   <img src="https://img.shields.io/badge/Dataset-HAM10000-4C6EF5?style=flat-square">
   <img src="https://img.shields.io/badge/Domain-Medical%20Imaging-8E44AD?style=flat-square">
-  <img src="https://img.shields.io/badge/status-work%20in%20progress-F39C12?style=flat-square">
+  <img src="https://github.com/LanceGonsalves/skin-lesion-leakage-benchmark/actions/workflows/ci.yml/badge.svg">
 </p>
 
 > ⚠️ **Not a clinical tool.** This is a research and educational project. It is not validated

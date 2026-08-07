@@ -8,6 +8,20 @@ at call time.
 from __future__ import annotations
 
 
+def checkpoint_name(split: str, backbone: str, seed: int,
+                    default_backbone: str, default_seed: int) -> str:
+    """Where a run's weights live.
+
+    A run at the configured defaults keeps the original flat name (`grouped_best.pt`)
+    so every existing command, figure and README reference still resolves. Only runs
+    that vary the seed or the architecture get a qualified name -- which means a
+    replication sweep can never silently overwrite the headline checkpoint.
+    """
+    if backbone == default_backbone and int(seed) == int(default_seed):
+        return f"{split}_best.pt"
+    return f"{split}__{backbone}__s{int(seed)}_best.pt"
+
+
 def resolve_device(prefer: str | None = None) -> str:
     """Pick the best available device: CUDA > MPS (Apple Silicon) > CPU."""
     import torch
